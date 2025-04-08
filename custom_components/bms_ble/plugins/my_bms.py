@@ -1,101 +1,68 @@
-"""Test the BLE Battery Management System base class functions."""
+"""Module to support My BMS."""
 
-import pytest
-
+import logging
+from typing import Any
+from bleak.backends.device import BLEDevice
+from bleak.uuids import normalize_uuid_str
 from custom_components.bms_ble.const import (
     ATTR_BATTERY_CHARGING,
-    ATTR_BATTERY_LEVEL,
     ATTR_CURRENT,
-    ATTR_CYCLE_CAP,
-    ATTR_CYCLE_CHRG,
-    ATTR_DELTA_VOLTAGE,
     ATTR_POWER,
-    ATTR_PROBLEM,
-    ATTR_RUNTIME,
-    ATTR_TEMPERATURE,
     ATTR_VOLTAGE,
-    KEY_CELL_VOLTAGE,
-    KEY_DESIGN_CAP,
-    KEY_PROBLEM,
 )
-from custom_components.bms_ble.plugins.basebms import BaseBMS, BMSsample
+from .basebms import BaseBMS, BMSsample
 
+LOGGER = logging.getLogger(__name__)
+BAT_TIMEOUT = 10
 
-def test_calc_missing_values(bms_data_fixture: BMSsample) -> None:
-    """Check if missing data is correctly calculated."""
-    bms_data: BMSsample = bms_data_fixture
-    ref: BMSsample = bms_data_fixture
+class BMS(BaseBMS):
+    """My BMS class implementation."""
 
-    BaseBMS._add_missing_values(
-        bms_data,
-        frozenset(
-            {
-                ATTR_BATTERY_CHARGING,
-                ATTR_CYCLE_CAP,
-                ATTR_POWER,
-                ATTR_RUNTIME,
-                ATTR_DELTA_VOLTAGE,
-                ATTR_TEMPERATURE,
-                ATTR_VOLTAGE,  # check that not overwritten
-                "invalid",
-            }
-        ),
-    )
-    ref = ref | {
-        ATTR_CYCLE_CAP: 238,
-        ATTR_DELTA_VOLTAGE: 0.111,
-        ATTR_POWER: (
-            -91
-            if bms_data[ATTR_CURRENT] < 0
-            else 0 if bms_data[ATTR_CURRENT] == 0 else 147
-        ),
-        ATTR_BATTERY_CHARGING: bms_data[ATTR_CURRENT]
-        > 0,  # battery is charging if current is positive
-        ATTR_TEMPERATURE: -34.396,
-    }
-    if bms_data[ATTR_CURRENT] < 0:
-        ref |= {ATTR_RUNTIME: 9415}
+    def __init__(self, ble_device: BLEDevice, reconnect: bool = False) -> None:
+        """Initialize BMS."""
+        LOGGER.debug("%s init(), BT address: %s", self.device_id(), ble_device.address)
+        super().__init__(LOGGER, self._notification_handler, ble_device, reconnect)
 
-    assert bms_data == ref
+    @staticmethod
+    def matcher_dict_list() -> list[dict[str, Any]]:
+        """Provide BluetoothMatcher definition."""
+        return [{"local_name": "my_bms", "connectable": True}]
 
+    @staticmethod
+    def device_info() -> dict[str, str]:
+        """Return device information for the battery management system."""
+        return {"manufacturer": "My Manufacturer", "model": "my_bms model"}
 
-def test_calc_voltage() -> None:
-    """Check if missing data is correctly calculated."""
-    bms_data = ref = {f"{KEY_CELL_VOLTAGE}0": 3.456, f"{KEY_CELL_VOLTAGE}1": 3.567}
-    BaseBMS._add_missing_values(bms_data, frozenset({ATTR_VOLTAGE}))
-    assert bms_data == ref | {ATTR_VOLTAGE: 7.023}
+    @staticmethod
+    def uuid_services() -> list[str]:
+        """Return list of 128-bit UUIDs of services required by BMS."""
+        return [normalize_uuid_str("0000")]  # change service UUID here!
 
+    @staticmethod
+    def uuid_rx() -> str:
+        """Return 16-bit UUID of characteristic that provides notification/read property."""
+        return "#changeme"
 
-def test_calc_cycle_chrg() -> None:
-    """Check if missing data is correctly calculated."""
-    bms_data = ref = {ATTR_BATTERY_LEVEL: 73, KEY_DESIGN_CAP: 125.0}
-    BaseBMS._add_missing_values(bms_data, frozenset({ATTR_CYCLE_CHRG}))
-    assert bms_data == ref | {ATTR_CYCLE_CHRG: 91.25}
+    @staticmethod
+    def uuid_tx() -> str:
+        """Return 16-bit UUID of characteristic that provides write property."""
+        return "#changeme"
 
+    @staticmethod
+    def _calc_values() -> set[str]:
+        return {
+            ATTR_POWER,
+            ATTR_BATTERY_CHARGING,
+        }  # calculate further values from BMS provided set ones
 
-@pytest.fixture(
-    name="problem_samples",
-    params=[
-        ({ATTR_VOLTAGE: -1}, "negative overall voltage"),
-        ({f"{KEY_CELL_VOLTAGE}0": 5.907}, "high cell voltage"),
-        ({f"{KEY_CELL_VOLTAGE}0": -0.001}, "negative cell voltage"),
-        ({ATTR_DELTA_VOLTAGE: 5.907}, "doubtful delta voltage"),
-        ({ATTR_CYCLE_CHRG: 0}, "doubtful cycle charge"),
-        ({ATTR_BATTERY_LEVEL: 101}, "doubtful SoC"),
-        ({KEY_PROBLEM: 0x1}, "BMS problem code"),
-        ({ATTR_PROBLEM: True}, "BMS problem report"),
-    ],
-    ids=lambda param: param[1],
-)
-def mock_bms_data(request: pytest.FixtureRequest) -> BMSsample:
-    """Return BMS data to check error handling function."""
-    return request.param[0]
+    def _notification_handler(self, _sender, data: bytearray) -> None:
+        """Handle the RX characteristics notify event (new data arrives)."""
+        pass
 
-
-def test_problems(problem_samples: BMSsample) -> None:
-    """Check if missing data is correctly calculated."""
-    bms_data: BMSsample = problem_samples
-
-    BaseBMS._add_missing_values(bms_data, frozenset({ATTR_RUNTIME}))
-
-    assert bms_data == problem_samples | {"problem": True}
+    async def _async_update(self) -> BMSsample:
+        """Update battery status information."""
+        LOGGER.debug("(%s) replace with command to UUID %s", self.name, BMS.uuid_tx())
+        return {
+            ATTR_VOLTAGE: 12,
+            ATTR_CURRENT: 1.5,
+        }  # fixed values, replace parsed data
